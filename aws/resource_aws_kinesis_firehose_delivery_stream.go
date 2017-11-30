@@ -500,6 +500,15 @@ func createSourceConfig(source map[string]interface{}) *firehose.KinesisStreamSo
 	return configuration
 }
 
+func readSourceConfig(sourceConfig *firehose.KinesisStreamSourceDescription) map[string]interface{} {
+	source := make(map[string]interface{})
+
+	source["kinesis_stream_arn"] = aws.StringValue(sourceConfig.KinesisStreamARN)
+	source["role_arn"] = aws.StringValue(sourceConfig.RoleARN)
+
+	return source
+}
+
 func createS3Config(d *schema.ResourceData) *firehose.S3DestinationConfiguration {
 	s3 := d.Get("s3_configuration").([]interface{})[0].(map[string]interface{})
 
@@ -1137,6 +1146,12 @@ func resourceAwsKinesisFirehoseDeliveryStreamRead(d *schema.ResourceData, meta i
 	s := resp.DeliveryStreamDescription
 	d.Set("version_id", s.VersionId)
 	d.Set("arn", *s.DeliveryStreamARN)
+
+	if s.Source != nil &&
+		s.Source.KinesisStreamSourceDescription != nil {
+		d.Set("kinesis_source_configuration", []interface{}{readSourceConfig(s.Source.KinesisStreamSourceDescription)})
+	}
+
 	if len(s.Destinations) > 0 {
 		destination := s.Destinations[0]
 		d.Set("destination_id", *destination.DestinationId)
