@@ -167,6 +167,9 @@ func resourceAwsKinesisFirehoseDeliveryStream() *schema.Resource {
 		Read:   resourceAwsKinesisFirehoseDeliveryStreamRead,
 		Update: resourceAwsKinesisFirehoseDeliveryStreamUpdate,
 		Delete: resourceAwsKinesisFirehoseDeliveryStreamDelete,
+		Importer: &schema.ResourceImporter{
+			State: resourceAwsKinesisFirehoseDeliveryStreamImportState,
+		},
 
 		SchemaVersion: 1,
 		MigrateState:  resourceAwsKinesisFirehoseMigrateState,
@@ -517,6 +520,29 @@ func createS3Config(d *schema.ResourceData) *firehose.S3DestinationConfiguration
 	}
 
 	return configuration
+}
+
+func readS3Config(s3config *firehose.S3DestinationDescription) map[string]interface{} {
+	tfconfig := make(map[string]interface{})
+
+	tfconfig["bucket_arn"] = aws.StringValue(s3config.BucketARN)
+	tfconfig["role_arn"] = aws.StringValue(s3config.RoleARN)
+	tfconfig["buffer_interval"] = aws.Int64Value(s3config.BufferingHints.IntervalInSeconds)
+	tfconfig["buffer_size"] = aws.Int64Value(s3config.BufferingHints.SizeInMBs)
+
+	if s3config.Prefix != nil {
+		tfconfig["prefix"] = aws.StringValue(s3config.Prefix)
+	}
+
+	tfconfig["compression_format"] = aws.StringValue(s3config.CompressionFormat)
+
+	if s3config.EncryptionConfiguration != nil &&
+		s3config.EncryptionConfiguration.KMSEncryptionConfig != nil &&
+		s3config.EncryptionConfiguration.KMSEncryptionConfig.AWSKMSKeyARN != nil {
+		tfconfig["kms_key_arn"] = aws.StringValue(s3config.EncryptionConfiguration.KMSEncryptionConfig.AWSKMSKeyARN)
+	}
+
+	return tfconfig
 }
 
 func expandS3BackupConfig(d map[string]interface{}) *firehose.S3DestinationConfiguration {
@@ -1114,6 +1140,11 @@ func resourceAwsKinesisFirehoseDeliveryStreamRead(d *schema.ResourceData, meta i
 	if len(s.Destinations) > 0 {
 		destination := s.Destinations[0]
 		d.Set("destination_id", *destination.DestinationId)
+
+		if destination.S3DestinationDescription != nil {
+			d.Set("destination", "s3")
+			d.Set("s3_configuration", []interface{}{readS3Config(destination.S3DestinationDescription)})
+		}
 	}
 
 	return nil
