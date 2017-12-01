@@ -119,7 +119,7 @@ func processingConfigurationSchema() *schema.Schema {
 											Required: true,
 											ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
 												value := v.(string)
-												if value != "LambdaArn" && value != "NumberOfRetries" {
+												if !isValidProcessorParameterName(value) {
 													errors = append(errors, fmt.Errorf(
 														"%q must be one of 'LambdaArn', 'NumberOfRetries'", k))
 												}
@@ -615,6 +615,45 @@ func createExtendedS3Config(d *schema.ResourceData) *firehose.ExtendedS3Destinat
 	return configuration
 }
 
+func readExtendedS3Config(s3config *firehose.ExtendedS3DestinationDescription) map[string]interface{} {
+	tfconfig := make(map[string]interface{})
+
+	tfconfig["bucket_arn"] = aws.StringValue(s3config.BucketARN)
+	tfconfig["role_arn"] = aws.StringValue(s3config.RoleARN)
+	tfconfig["buffer_interval"] = aws.Int64Value(s3config.BufferingHints.IntervalInSeconds)
+	tfconfig["buffer_size"] = aws.Int64Value(s3config.BufferingHints.SizeInMBs)
+
+	if s3config.Prefix != nil {
+		tfconfig["prefix"] = aws.StringValue(s3config.Prefix)
+	}
+
+	tfconfig["compression_format"] = aws.StringValue(s3config.CompressionFormat)
+
+	if s3config.EncryptionConfiguration != nil &&
+		s3config.EncryptionConfiguration.KMSEncryptionConfig != nil &&
+		s3config.EncryptionConfiguration.KMSEncryptionConfig.AWSKMSKeyARN != nil {
+		tfconfig["kms_key_arn"] = aws.StringValue(s3config.EncryptionConfiguration.KMSEncryptionConfig.AWSKMSKeyARN)
+	}
+
+	if s3config.CloudWatchLoggingOptions != nil {
+		cwopts := cloudWatchLoggingOptionsSchema().ZeroValue()
+
+		cwopts.(*schema.Set).Add(readCloudWatchLoggingConfiguration(s3config.CloudWatchLoggingOptions))
+
+		tfconfig["cloudwatch_logging_options"] = cwopts
+	}
+
+	if s3config.ProcessingConfiguration != nil {
+		tfconfig["processing_configuration"] = []interface{}{readProcessingConfiguration(s3config.ProcessingConfiguration)}
+	}
+
+	return tfconfig
+}
+
+func isValidProcessorParameterName(paramName string) bool {
+	return paramName == "LambdaArn" || paramName == "NumberOfRetries"
+}
+
 func updateS3Config(d *schema.ResourceData) *firehose.S3DestinationUpdate {
 	s3 := d.Get("s3_configuration").([]interface{})[0].(map[string]interface{})
 
@@ -702,6 +741,36 @@ func extractProcessingConfiguration(s3 map[string]interface{}) *firehose.Process
 		Enabled:    aws.Bool(processingConfiguration["enabled"].(bool)),
 		Processors: extractProcessors(processingConfiguration["processors"].([]interface{})),
 	}
+}
+
+func readProcessingConfiguration(config *firehose.ProcessingConfiguration) map[string]interface{} {
+	tfconfig := make(map[string]interface{})
+
+	tfconfig["enabled"] = aws.BoolValue(config.Enabled)
+
+	var processors []interface{}
+	for _, procConfig := range config.Processors {
+		proc := make(map[string]interface{})
+
+		proc["type"] = aws.StringValue(procConfig.Type)
+
+		var params []interface{}
+		for _, param := range procConfig.Parameters {
+
+			if paramName := aws.StringValue(param.ParameterName); isValidProcessorParameterName(paramName) {
+				params = append(params, map[string]interface{}{
+					"parameter_name":  paramName,
+					"parameter_value": aws.StringValue(param.ParameterValue),
+				})
+			}
+		}
+		proc["parameters"] = params
+
+		processors = append(processors, proc)
+	}
+	tfconfig["processors"] = processors
+
+	return tfconfig
 }
 
 func extractProcessors(processingConfigurationProcessors []interface{}) []*firehose.Processor {
@@ -1174,13 +1243,29 @@ func resourceAwsKinesisFirehoseDeliveryStreamRead(d *schema.ResourceData, meta i
 		destination := s.Destinations[0]
 		d.Set("destination_id", *destination.DestinationId)
 
-		if destination.S3DestinationDescription != nil {
-			d.Set("destination", "s3")
-			d.Set("s3_configuration", []interface{}{readS3Config(destination.S3DestinationDescription)})
+		if _, ok := d.GetOk("destination"); !ok {
+			d.Set("destination", guessFirehoseStreamDestination(destination))
 		}
+
+		if d.Get("destination") == "s3" {
+			d.Set("s3_configuration", []interface{}{readS3Config(destination.S3DestinationDescription)})
+		} else {
+			d.Set("extended_s3_configuration", []interface{}{readExtendedS3Config(destination.ExtendedS3DestinationDescription)})
+		}
+
 	}
 
 	return nil
+}
+
+func guessFirehoseStreamDestination(d *firehose.DestinationDescription) string {
+	if d.ExtendedS3DestinationDescription != nil {
+		return "extended_s3"
+	} else if d.S3DestinationDescription != nil {
+		return "s3"
+	}
+
+	panic("Not implemented")
 }
 
 func resourceAwsKinesisFirehoseDeliveryStreamDelete(d *schema.ResourceData, meta interface{}) error {
