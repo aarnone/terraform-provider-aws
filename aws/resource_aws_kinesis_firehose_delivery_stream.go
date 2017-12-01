@@ -551,6 +551,14 @@ func readS3Config(s3config *firehose.S3DestinationDescription) map[string]interf
 		tfconfig["kms_key_arn"] = aws.StringValue(s3config.EncryptionConfiguration.KMSEncryptionConfig.AWSKMSKeyARN)
 	}
 
+	if s3config.CloudWatchLoggingOptions != nil {
+		cwopts := cloudWatchLoggingOptionsSchema().ZeroValue()
+
+		cwopts.(*schema.Set).Add(readCloudWatchLoggingConfiguration(s3config.CloudWatchLoggingOptions))
+
+		tfconfig["cloudwatch_logging_options"] = cwopts
+	}
+
 	return tfconfig
 }
 
@@ -767,6 +775,16 @@ func extractCloudWatchLoggingConfiguration(s3 map[string]interface{}) *firehose.
 
 	return loggingOptions
 
+}
+
+func readCloudWatchLoggingConfiguration(cwconfig *firehose.CloudWatchLoggingOptions) map[string]interface{} {
+	tfstate := make(map[string]interface{})
+
+	tfstate["enabled"] = aws.BoolValue(cwconfig.Enabled)
+	tfstate["log_group_name"] = aws.StringValue(cwconfig.LogGroupName)
+	tfstate["log_stream_name"] = aws.StringValue(cwconfig.LogStreamName)
+
+	return tfstate
 }
 
 func extractPrefixConfiguration(s3 map[string]interface{}) *string {
