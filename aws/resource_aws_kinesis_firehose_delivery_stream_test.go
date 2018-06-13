@@ -483,6 +483,33 @@ func TestAccAWSKinesisFirehoseDeliveryStream_missingProcessingConfiguration(t *t
 	})
 }
 
+func TestAccAWSKinesisFirehoseDeliveryStream_disabledProcessingConfiguration(t *testing.T) {
+	var stream firehose.DeliveryStreamDescription
+	ri := acctest.RandInt()
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckKinesisFirehoseDeliveryStreamDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccKinesisFirehoseDeliveryStreamConfig_withDisabledProcessingConfiguration(ri),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckKinesisFirehoseDeliveryStreamExists("aws_kinesis_firehose_delivery_stream.test_stream", &stream),
+					testAccCheckAWSKinesisFirehoseDeliveryStreamAttributes(&stream, nil, nil, nil, nil, nil),
+				),
+			},
+			{
+				Config: testAccKinesisFirehoseDeliveryStreamConfig_missingProcessingConfiguration(ri),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckKinesisFirehoseDeliveryStreamExists("aws_kinesis_firehose_delivery_stream.test_stream", &stream),
+					testAccCheckAWSKinesisFirehoseDeliveryStreamAttributes(&stream, nil, nil, nil, nil, nil),
+				),
+			},
+		},
+	})
+}
+
 func testAccCheckKinesisFirehoseDeliveryStreamExists(n string, stream *firehose.DeliveryStreamDescription) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		rs, ok := s.RootModule().Resources[n]
@@ -1431,6 +1458,92 @@ resource "aws_kinesis_firehose_delivery_stream" "test_stream" {
     buffer_size        = 5
     compression_format = "GZIP"
     bucket_arn         = "${aws_s3_bucket.bucket.arn}"
+  }
+}
+`, rInt, rInt, rInt, rInt)
+}
+
+func testAccKinesisFirehoseDeliveryStreamConfig_withDisabledProcessingConfiguration(rInt int) string {
+	return fmt.Sprintf(`
+resource "aws_iam_role" "firehose" {
+  name = "tf_acctest_firehose_delivery_role_%d"
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "firehose.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy" "firehose" {
+  name = "tf_acctest_firehose_delivery_policy_%d"
+  role = "${aws_iam_role.firehose.id}"
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Action": [
+        "s3:AbortMultipartUpload",
+        "s3:GetBucketLocation",
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:ListBucketMultipartUploads",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${aws_s3_bucket.bucket.id}",
+        "arn:aws:s3:::${aws_s3_bucket.bucket.id}/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:putLogEvents"
+      ],
+      "Resource": [
+        "arn:aws:logs::log-group:/aws/kinesisfirehose/*"
+      ]
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_s3_bucket" "bucket" {
+  bucket = "tf-test-bucket-%d"
+  acl = "private"
+}
+
+resource "aws_kinesis_firehose_delivery_stream" "test_stream" {
+  name        = "terraform-kinesis-firehose-mpc-%d"
+  destination = "extended_s3"
+
+  extended_s3_configuration {
+    role_arn           = "${aws_iam_role.firehose.arn}"
+    prefix             = "tracking/autocomplete_stream/"
+    buffer_interval    = 300
+    buffer_size        = 5
+    compression_format = "GZIP"
+    bucket_arn         = "${aws_s3_bucket.bucket.arn}"
+
+    processing_configuration = [
+      {
+        enabled    = "false"
+        processors = []
+      },
+    ]
   }
 }
 `, rInt, rInt, rInt, rInt)
